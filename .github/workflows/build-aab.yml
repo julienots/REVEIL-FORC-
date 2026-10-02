@@ -103,15 +103,13 @@ jobs:
           def keyAlias = props.getProperty("KEY_ALIAS")
           def keyPassword = props.getProperty("KEY_PASSWORD")
 
-          android.signingConfigs.create("githubRelease") {
-              storeFile = ksFile
-              this.storePassword = storePassword
-              this.keyAlias = keyAlias
-              this.keyPassword = keyPassword
-          }
+          def signing = android.signingConfigs.create("githubRelease")
+          signing.storeFile = ksFile
+          signing.storePassword = storePassword
+          signing.keyAlias = keyAlias
+          signing.keyPassword = keyPassword
 
-          android.buildTypes.release.signingConfig =
-              android.signingConfigs.githubRelease
+          android.buildTypes.release.signingConfig = signing
           EOF
 
           printf '\napply from: "signing.gradle"\n' >> app/build.gradle
