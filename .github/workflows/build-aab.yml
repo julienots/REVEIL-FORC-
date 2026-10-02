@@ -90,10 +90,10 @@ jobs:
       - name: Configure release signing
         working-directory: ${{ steps.project.outputs.root }}
         run: |
-          cat > signing.gradle <<'EOF'
-          def ksFile = file("upload-keystore.jks")
+          cat > app/signing.gradle <<'EOF'
+          def ksFile = file("../upload-keystore.jks")
           def props = new Properties()
-          def envFile = file("signing.env")
+          def envFile = file("../signing.env")
 
           envFile.withInputStream {
               props.load(it)
