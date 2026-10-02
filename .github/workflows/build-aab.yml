@@ -6,7 +6,6 @@ on:
 jobs:
   build-aab:
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
 
@@ -19,142 +18,35 @@ jobs:
           rm -rf build-src
           mkdir build-src
           unzip -q ReveilForce_GitHub_AAB.zip -d build-src
-
-          echo "Contenu extrait :"
           find build-src -maxdepth 3 -type f | head -100
 
       - name: Find Android project
         id: project
         run: |
           SETTINGS=$(find build-src -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -1)
-
           if [ -z "$SETTINGS" ]; then
             echo "ERREUR : aucun settings.gradle trouvé."
             exit 1
           fi
-
           PROJECT_ROOT=$(dirname "$SETTINGS")
-
           echo "Projet Android trouvé : $PROJECT_ROOT"
           echo "root=$PROJECT_ROOT" >> "$GITHUB_OUTPUT"
 
       - name: Bump Android version code
         working-directory: ${{ steps.project.outputs.root }}
         run: |
-          echo "Recherche du fichier Gradle..."
-          FILE=$(find . -maxdepth 2 -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) | grep -E '/app/build.gradle(\.kts)?
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-disabled: true
-
-      - name: Prepare signing key
-        working-directory: ${{ steps.project.outputs.root }}
-        env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > upload-keystore.jks
-
-            cat > signing.env <<EOF
-          KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD
-          KEY_ALIAS=$KEY_ALIAS
-          KEY_PASSWORD=$KEY_PASSWORD
-          EOF
-          else
-            echo "Aucune clé GitHub configurée : génération d'une clé d'upload."
-
-            PASS="$(openssl rand -hex 24)"
-
-            keytool -genkeypair -v \
-              -keystore upload-keystore.jks \
-              -storepass "$PASS" \
-              -keypass "$PASS" \
-              -alias upload \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=ReveilForce, OU=Android, O=ReveilForce, L=France, ST=France, C=FR"
-
-            {
-              echo "KEYSTORE_PASSWORD=$PASS"
-              echo "KEY_ALIAS=upload"
-              echo "KEY_PASSWORD=$PASS"
-            } > signing.env
-          fi
-
-      - name: Configure release signing
-        working-directory: ${{ steps.project.outputs.root }}
-        run: |
-          cat > app/signing.gradle <<'EOF'
-          def ksFile = file("../upload-keystore.jks")
-          def props = new Properties()
-          def envFile = file("../signing.env")
-
-          envFile.withInputStream {
-              props.load(it)
-          }
-
-          def storePassword = props.getProperty("KEYSTORE_PASSWORD")
-          def keyAlias = props.getProperty("KEY_ALIAS")
-          def keyPassword = props.getProperty("KEY_PASSWORD")
-
-          def signing = android.signingConfigs.create("githubRelease")
-          signing.storeFile = ksFile
-          signing.storePassword = storePassword
-          signing.keyAlias = keyAlias
-          signing.keyPassword = keyPassword
-
-          android.buildTypes.release.signingConfig = signing
-          EOF
-
-          printf '\napply from: "signing.gradle"\n' >> app/build.gradle
-
-      - name: Build AAB
-        working-directory: ${{ steps.project.outputs.root }}
-        run: |
-          gradle --no-daemon :app:bundleRelease
-
-      - name: Upload AAB
-        uses: actions/upload-artifact@v4
-        with:
-          name: ReveilForce-release
-          path: ${{ steps.project.outputs.root }}/app/build/outputs/bundle/release/app-release.aab
-
-      - name: Save generated signing key
-        if: ${{ hashFiles('build-src/**/signing.env') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ReveilForce-upload-key
-          path: |
-            build-src/**/upload-keystore.jks
-            build-src/**/signing.env
- | head -1)
-          if [ -z "$FILE" ]; then
-            FILE=$(find . -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) | head -1)
-          fi
-          if [ -z "$FILE" ]; then
-            echo "Aucun fichier build.gradle trouvé."
-            exit 1
-          fi
-          echo "Fichier: $FILE"
+          FILE="app/build.gradle"
+          if [ ! -f "$FILE" ]; then FILE="app/build.gradle.kts"; fi
+          if [ ! -f "$FILE" ]; then echo "ERREUR : fichier Gradle introuvable."; exit 1; fi
           if grep -qE 'versionCode[[:space:]]+[0-9]+' "$FILE"; then
             sed -i -E 's/versionCode[[:space:]]+[0-9]+/versionCode 2/' "$FILE"
           elif grep -qE 'versionCode[[:space:]]*=[[:space:]]*[0-9]+' "$FILE"; then
             sed -i -E 's/versionCode[[:space:]]*=[[:space:]]*[0-9]+/versionCode = 2/' "$FILE"
           else
-            echo "Impossible de trouver versionCode dans $FILE"
-            exit 1
+            echo "ERREUR : versionCode introuvable."; exit 1
           fi
           grep -n "versionCode" "$FILE"
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -176,33 +68,15 @@ jobs:
         run: |
           if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
             echo "$KEYSTORE_B64" | base64 -d > upload-keystore.jks
-
-            cat > signing.env <<EOF
-          KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD
-          KEY_ALIAS=$KEY_ALIAS
-          KEY_PASSWORD=$KEY_PASSWORD
-          EOF
           else
-            echo "Aucune clé GitHub configurée : génération d'une clé d'upload."
-
             PASS="$(openssl rand -hex 24)"
-
-            keytool -genkeypair -v \
-              -keystore upload-keystore.jks \
-              -storepass "$PASS" \
-              -keypass "$PASS" \
-              -alias upload \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=ReveilForce, OU=Android, O=ReveilForce, L=France, ST=France, C=FR"
-
-            {
-              echo "KEYSTORE_PASSWORD=$PASS"
-              echo "KEY_ALIAS=upload"
-              echo "KEY_PASSWORD=$PASS"
-            } > signing.env
+            keytool -genkeypair -v -keystore upload-keystore.jks -storepass "$PASS" -keypass "$PASS" -alias upload -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=ReveilForce, OU=Android, O=ReveilForce, L=France, ST=France, C=FR"
+            KEYSTORE_PASSWORD="$PASS"
+            KEY_ALIAS="upload"
+            KEY_PASSWORD="$PASS"
+            export KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD
           fi
+          { echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"; echo "KEY_ALIAS=$KEY_ALIAS"; echo "KEY_PASSWORD=$KEY_PASSWORD"; } > signing.env
 
       - name: Configure release signing
         working-directory: ${{ steps.project.outputs.root }}
@@ -211,24 +85,14 @@ jobs:
           def ksFile = file("../upload-keystore.jks")
           def props = new Properties()
           def envFile = file("../signing.env")
-
-          envFile.withInputStream {
-              props.load(it)
-          }
-
-          def storePassword = props.getProperty("KEYSTORE_PASSWORD")
-          def keyAlias = props.getProperty("KEY_ALIAS")
-          def keyPassword = props.getProperty("KEY_PASSWORD")
-
+          envFile.withInputStream { props.load(it) }
           def signing = android.signingConfigs.create("githubRelease")
           signing.storeFile = ksFile
-          signing.storePassword = storePassword
-          signing.keyAlias = keyAlias
-          signing.keyPassword = keyPassword
-
+          signing.storePassword = props.getProperty("KEYSTORE_PASSWORD")
+          signing.keyAlias = props.getProperty("KEY_ALIAS")
+          signing.keyPassword = props.getProperty("KEY_PASSWORD")
           android.buildTypes.release.signingConfig = signing
           EOF
-
           printf '\napply from: "signing.gradle"\n' >> app/build.gradle
 
       - name: Build AAB
