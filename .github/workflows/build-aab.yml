@@ -61,22 +61,27 @@ jobs:
       - name: Prepare signing key
         working-directory: ${{ steps.project.outputs.root }}
         env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > upload-keystore.jks
-          else
-            PASS="$(openssl rand -hex 24)"
-            keytool -genkeypair -v -keystore upload-keystore.jks -storepass "$PASS" -keypass "$PASS" -alias upload -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=ReveilForce, OU=Android, O=ReveilForce, L=France, ST=France, C=FR"
-            KEYSTORE_PASSWORD="$PASS"
-            KEY_ALIAS="upload"
-            KEY_PASSWORD="$PASS"
-            export KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD
+          echo "Récupération de la clé d'upload utilisée pour la première release..."
+          curl -fsSL             -H "Accept: application/vnd.github+json"             -H "Authorization: Bearer $GH_TOKEN"             "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/11224001391/zip"             -o /tmp/upload-key.zip
+
+          rm -rf /tmp/upload-key
+          mkdir -p /tmp/upload-key
+          unzip -q /tmp/upload-key.zip -d /tmp/upload-key
+
+          KEYSTORE=$(find /tmp/upload-key -name "upload-keystore.jks" | head -1)
+          ENVFILE=$(find /tmp/upload-key -name "signing.env" | head -1)
+
+          if [ -z "$KEYSTORE" ] || [ -z "$ENVFILE" ]; then
+            echo "ERREUR : clé d'upload historique introuvable."
+            exit 1
           fi
-          { echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"; echo "KEY_ALIAS=$KEY_ALIAS"; echo "KEY_PASSWORD=$KEY_PASSWORD"; } > signing.env
+
+          cp "$KEYSTORE" upload-keystore.jks
+          cp "$ENVFILE" signing.env
+
+          echo "Clé d'upload historique restaurée."
 
       - name: Configure release signing
         working-directory: ${{ steps.project.outputs.root }}
