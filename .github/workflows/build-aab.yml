@@ -6,6 +6,7 @@ on:
 jobs:
   build-aab:
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
 
@@ -13,20 +14,43 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Extract Android project
+        run: |
+          rm -rf build-src
+          mkdir build-src
+          unzip -q ReveilForce_GitHub_AAB.zip -d build-src
+
+          echo "Contenu extrait :"
+          find build-src -maxdepth 3 -type f | head -100
+
+      - name: Find Android project
+        id: project
+        run: |
+          SETTINGS=$(find build-src -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -1)
+
+          if [ -z "$SETTINGS" ]; then
+            echo "ERREUR : aucun settings.gradle trouvé."
+            exit 1
+          fi
+
+          PROJECT_ROOT=$(dirname "$SETTINGS")
+
+          echo "Projet Android trouvé : $PROJECT_ROOT"
+          echo "root=$PROJECT_ROOT" >> "$GITHUB_OUTPUT"
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          cache-disabled: true
 
       - name: Prepare signing key
-        working-directory: ReveilForce
+        working-directory: ${{ steps.project.outputs.root }}
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -35,9 +59,15 @@ jobs:
         run: |
           if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
             echo "$KEYSTORE_B64" | base64 -d > upload-keystore.jks
-            echo "Using the signing key stored in GitHub Secrets."
+
+            cat > signing.env <<EOF
+          KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD
+          KEY_ALIAS=$KEY_ALIAS
+          KEY_PASSWORD=$KEY_PASSWORD
+          EOF
           else
-            echo "No signing secrets found. Generating a one-time upload key."
+            echo "Aucune clé GitHub configurée : génération d'une clé d'upload."
+
             PASS="$(openssl rand -hex 24)"
 
             keytool -genkeypair -v \
@@ -58,34 +88,20 @@ jobs:
           fi
 
       - name: Configure release signing
-        working-directory: ReveilForce
+        working-directory: ${{ steps.project.outputs.root }}
         run: |
           cat > signing.gradle <<'EOF'
           def ksFile = file("upload-keystore.jks")
           def props = new Properties()
           def envFile = file("signing.env")
 
-          if (envFile.exists()) {
-              envFile.withInputStream {
-                  props.load(it)
-              }
+          envFile.withInputStream {
+              props.load(it)
           }
 
-          def storePassword =
-              System.getenv("ANDROID_KEYSTORE_PASSWORD")
-              ?: props.getProperty("KEYSTORE_PASSWORD")
-
-          def keyAlias =
-              System.getenv("ANDROID_KEY_ALIAS")
-              ?: props.getProperty("KEY_ALIAS")
-
-          def keyPassword =
-              System.getenv("ANDROID_KEY_PASSWORD")
-              ?: props.getProperty("KEY_PASSWORD")
-
-          if (!ksFile.exists() || !storePassword || !keyAlias || !keyPassword) {
-              throw new GradleException("Signing configuration is missing.")
-          }
+          def storePassword = props.getProperty("KEYSTORE_PASSWORD")
+          def keyAlias = props.getProperty("KEY_ALIAS")
+          def keyPassword = props.getProperty("KEY_PASSWORD")
 
           android.signingConfigs.create("githubRelease") {
               storeFile = ksFile
@@ -101,20 +117,22 @@ jobs:
           printf '\napply from: "signing.gradle"\n' >> app/build.gradle
 
       - name: Build AAB
-        working-directory: ReveilForce
-        run: gradle --no-daemon :app:bundleRelease
+        working-directory: ${{ steps.project.outputs.root }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:bundleRelease
 
       - name: Upload AAB
         uses: actions/upload-artifact@v4
         with:
           name: ReveilForce-release
-          path: ReveilForce/app/build/outputs/bundle/release/app-release.aab
+          path: ${{ steps.project.outputs.root }}/app/build/outputs/bundle/release/app-release.aab
 
       - name: Save generated signing key
-        if: ${{ hashFiles('ReveilForce/signing.env') != '' }}
+        if: ${{ hashFiles('build-src/**/signing.env') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: ReveilForce-upload-key
           path: |
-            ReveilForce/upload-keystore.jks
-            ReveilForce/signing.env
+            build-src/**/upload-keystore.jks
+            build-src/**/signing.env
