@@ -1,0 +1,120 @@
+name: Build signed Android App Bundle
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-aab:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Prepare signing key
+        working-directory: ReveilForce
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > upload-keystore.jks
+            echo "Using the signing key stored in GitHub Secrets."
+          else
+            echo "No signing secrets found. Generating a one-time upload key."
+            PASS="$(openssl rand -hex 24)"
+
+            keytool -genkeypair -v \
+              -keystore upload-keystore.jks \
+              -storepass "$PASS" \
+              -keypass "$PASS" \
+              -alias upload \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=ReveilForce, OU=Android, O=ReveilForce, L=France, ST=France, C=FR"
+
+            {
+              echo "KEYSTORE_PASSWORD=$PASS"
+              echo "KEY_ALIAS=upload"
+              echo "KEY_PASSWORD=$PASS"
+            } > signing.env
+          fi
+
+      - name: Configure release signing
+        working-directory: ReveilForce
+        run: |
+          cat > signing.gradle <<'EOF'
+          def ksFile = file("upload-keystore.jks")
+          def props = new Properties()
+          def envFile = file("signing.env")
+
+          if (envFile.exists()) {
+              envFile.withInputStream {
+                  props.load(it)
+              }
+          }
+
+          def storePassword =
+              System.getenv("ANDROID_KEYSTORE_PASSWORD")
+              ?: props.getProperty("KEYSTORE_PASSWORD")
+
+          def keyAlias =
+              System.getenv("ANDROID_KEY_ALIAS")
+              ?: props.getProperty("KEY_ALIAS")
+
+          def keyPassword =
+              System.getenv("ANDROID_KEY_PASSWORD")
+              ?: props.getProperty("KEY_PASSWORD")
+
+          if (!ksFile.exists() || !storePassword || !keyAlias || !keyPassword) {
+              throw new GradleException("Signing configuration is missing.")
+          }
+
+          android.signingConfigs.create("githubRelease") {
+              storeFile = ksFile
+              this.storePassword = storePassword
+              this.keyAlias = keyAlias
+              this.keyPassword = keyPassword
+          }
+
+          android.buildTypes.release.signingConfig =
+              android.signingConfigs.githubRelease
+          EOF
+
+          printf '\napply from: "signing.gradle"\n' >> app/build.gradle
+
+      - name: Build AAB
+        working-directory: ReveilForce
+        run: gradle --no-daemon :app:bundleRelease
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: ReveilForce-release
+          path: ReveilForce/app/build/outputs/bundle/release/app-release.aab
+
+      - name: Save generated signing key
+        if: ${{ hashFiles('ReveilForce/signing.env') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ReveilForce-upload-key
+          path: |
+            ReveilForce/upload-keystore.jks
+            ReveilForce/signing.env
